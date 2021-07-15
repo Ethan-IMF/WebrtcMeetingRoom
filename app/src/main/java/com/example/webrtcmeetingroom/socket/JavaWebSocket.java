@@ -13,6 +13,8 @@ import com.example.webrtcmeetingroom.connection.PeerConnectionManager;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
 import org.json.JSONObject;
+import org.webrtc.IceCandidate;
+import org.webrtc.SessionDescription;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -67,11 +69,9 @@ public class JavaWebSocket {
                  *
                  *  拿到：e1e7027c-20d5-434b-9902-2a8691afa733 就可以去建立p2p连接了
                  */
-                Map map  = JSON.parseObject(message,Map.class);
-                String eventName= (String) map.get("eventName");
-                if (eventName.equals("_peers")){
-                    handleJoinRoom(map);
-                }
+
+                handleMessage(message);
+
 
             }
 
@@ -103,6 +103,53 @@ public class JavaWebSocket {
             mWebSocketClient.connect();
 
         }
+    }
+
+    private void handleMessage(String message) {
+        Map map  = JSON.parseObject(message,Map.class);
+        String eventName= (String) map.get("eventName");
+        if (eventName.equals("_peers")){
+            handleJoinRoom(map);
+        }
+        // 对方的响应呼叫 获取对方的  iceCandidate
+        if (eventName.equals("_ice_candidate")){
+            handleRemoteCandidate(map);
+        }
+
+        // 接受对方的SDP
+        if (eventName.equals("_answer")){
+            handleAnswer(map);
+        }
+
+    }
+
+    private void handleAnswer(Map map) {
+        Map data = (Map) map.get("data");
+        Map sdpDic;
+        if (data != null) {
+            sdpDic = (Map) data.get("sdp");
+            String socketId = (String) data.get("socketId");
+            String sdp = (String) sdpDic.get("sdp");
+            peerConnectionManager.onReceiverAnswer(socketId, sdp);
+        }
+
+    }
+
+    // 对方响应呼叫 传回的信息
+    private void handleRemoteCandidate(Map map) {
+        Map data = (Map) map.get("data");
+        String socketId;
+        if (data != null) {
+            socketId = (String) data.get("socketId");
+            String sdpMid = (String) data.get("id");
+            sdpMid = (null == sdpMid) ? "video" : sdpMid;
+            int sdpMLineIndex = (int) Double.parseDouble(String.valueOf(data.get("label")));
+            String candidate = (String) data.get("candidate");
+//            生成 IceCandidate对象
+            IceCandidate iceCandidate = new IceCandidate(sdpMid, sdpMLineIndex, candidate);
+            peerConnectionManager.onRemoteIceCandidate(socketId,iceCandidate);
+        }
+
     }
 
     private void handleJoinRoom(Map map) {
@@ -142,7 +189,41 @@ public class JavaWebSocket {
 
     }
 
+    public void sendOffer(String socketId, SessionDescription sdp){
+        HashMap<String, Object> childMap1 = new HashMap();
+        childMap1.put("type", "offer");
+        childMap1.put("sdp", sdp.description);
 
+        HashMap<String, Object> childMap2 = new HashMap();
+        childMap2.put("socketId", socketId);
+        childMap2.put("sdp", childMap1);
+
+        HashMap<String, Object> map = new HashMap();
+        map.put("eventName", "__offer");
+        map.put("data", childMap2);
+
+        com.alibaba.fastjson.JSONObject object = new com.alibaba.fastjson.JSONObject(map);
+        String jsonString  = object.toString();
+        Log.d(TAG, "send-->" + jsonString);
+        mWebSocketClient.send(jsonString);
+    }
+
+
+    // 将自己的 iceCandidate 传递给服务器
+    public void sendIceCandidate(String socketId, IceCandidate iceCandidate) {
+        HashMap<String, Object> childMap = new HashMap();
+        childMap.put("id", iceCandidate.sdpMid);
+        childMap.put("label", iceCandidate.sdpMLineIndex);
+        childMap.put("candidate", iceCandidate.sdp);
+        childMap.put("socketId", socketId);
+        HashMap<String, Object> map = new HashMap();
+        map.put("eventName", "__ice_candidate");
+        map.put("data", childMap);
+        com.alibaba.fastjson.JSONObject object = new com.alibaba.fastjson.JSONObject(map);
+        String jsonString = object.toString();
+        Log.d(TAG, "send-->" + jsonString);
+        mWebSocketClient.send(jsonString);
+    }
 
 
     public static class TrustManagerTest implements X509TrustManager{
