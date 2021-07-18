@@ -1,6 +1,7 @@
 package com.example.webrtcmeetingroom;
 
 import com.example.webrtcmeetingroom.connection.PeerConnectionManager;
+import com.example.webrtcmeetingroom.interfaces.IViewCallback;
 import com.example.webrtcmeetingroom.socket.JavaWebSocket;
 
 import org.webrtc.EglBase;
@@ -34,5 +35,35 @@ public class WebRTCManager {
 
         webSocket.joinRoom(roomId);
 
+    }
+
+    public void toggleMic(boolean enableMic) {
+        if (peerConnectionManager != null) {
+            peerConnectionManager.toggleSpeaker(enableMic);
+        }
+    }
+
+    public void toggleLarge(boolean enableSpeaker) {
+        if (peerConnectionManager != null) {
+            peerConnectionManager.toggleLarge(enableSpeaker);
+        }
+    }
+
+    public void switchCamera() {
+        if (peerConnectionManager != null) {
+            peerConnectionManager.switchCamera();
+        }
+
+    }
+
+    public void exitRoom() {
+        if (peerConnectionManager != null) {
+            webSocket = null;
+            peerConnectionManager.exitRoom();
+        }
+    }
+
+    public void setCallBack(IViewCallback viewCallback) {
+        peerConnectionManager.setViewCallback(viewCallback);
     }
 }

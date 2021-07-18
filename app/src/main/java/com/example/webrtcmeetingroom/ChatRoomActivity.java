@@ -1,6 +1,7 @@
 package com.example.webrtcmeetingroom;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.fragment.app.FragmentManager;
 
 import android.app.Activity;
 import android.content.Intent;
@@ -11,6 +12,7 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.RelativeLayout;
 
+import com.example.webrtcmeetingroom.interfaces.IViewCallback;
 import com.example.webrtcmeetingroom.utils.PermissionUtil;
 import com.example.webrtcmeetingroom.utils.Utils;
 
@@ -25,7 +27,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class ChatRoomActivity extends AppCompatActivity {
+public class ChatRoomActivity extends AppCompatActivity implements IViewCallback {
 
     private FrameLayout wrVideoLayout;
     private WebRTCManager webRTCManager;
@@ -33,8 +35,6 @@ public class ChatRoomActivity extends AppCompatActivity {
     private VideoTrack localVideoTrack;
     private Map<String, SurfaceViewRenderer> videoViews = new HashMap<>();
     private List<String> persons = new ArrayList<>();
-
-
 
 
     public static void openActivity(Activity activity) {
@@ -53,6 +53,16 @@ public class ChatRoomActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_room);
         initView();
+        ChatRoomFragment chatRoomFragment = new ChatRoomFragment();
+        replaceFragment(chatRoomFragment);
+    }
+
+    private void replaceFragment(ChatRoomFragment fragment) {
+        FragmentManager manager = getSupportFragmentManager();
+        manager.beginTransaction()
+                .replace(R.id.wr_container, fragment)
+                .commit();
+
     }
 
     private void initView() {
@@ -62,13 +72,14 @@ public class ChatRoomActivity extends AppCompatActivity {
                 .MATCH_PARENT, ViewGroup.LayoutParams
                 .MATCH_PARENT));
         webRTCManager = WebRTCManager.getInstance();
-//        webRTCManager.setCallBack(this);
+        webRTCManager.setCallBack(this);
         if (!PermissionUtil.isNeedRequestPermission(this)) {
             webRTCManager.joinRoom(this, rootEglBase);
         }
-
     }
 
+
+    @Override
     public void onSetLocalStream(MediaStream stream, String myId) {
         List<VideoTrack> videoTracks  = stream.videoTracks;
         if (videoTracks.size()>0){
@@ -84,34 +95,41 @@ public class ChatRoomActivity extends AppCompatActivity {
 
     }
 
-    private void addView(String myId, MediaStream stream) {
-        SurfaceViewRenderer renderer = new SurfaceViewRenderer(this);
-        renderer.init(rootEglBase.getEglBaseContext(),null);
-        renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT);
-        renderer.setMirror(true);
 
-        if (stream.videoTracks.size()>0){
+    private void addView(String userId, MediaStream stream) {
+//        不用SurfaceView  采用webrtc给我们提供的SurfaceViewRenderer
+        SurfaceViewRenderer renderer = new SurfaceViewRenderer(this);
+//        初始化SurfaceView
+        renderer.init(rootEglBase.getEglBaseContext(), null);
+//        SCALE_ASPECT_FIT 设置缩放模式 按照View的宽度 和高度设置 ， SCALE_ASPECT_FILL按照摄像头预览的画面大小设置
+        renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT);
+//翻转
+        renderer.setMirror(true);
+//        将摄像头的数据 渲染到surfaceViewrender
+        if (stream.videoTracks.size() > 0) {
             stream.videoTracks.get(0).addSink(renderer);
         }
 
-        videoViews.put(myId,renderer);
-        persons.add(myId);
+//        会议室  1 + N个人
+        videoViews.put(userId, renderer);
+        persons.add(userId);
+//将SurfaceViewRenderer添加到FrameLayout  width=0  height=0
         wrVideoLayout.addView(renderer);
-        // 宽度和高度
-        int size  = videoViews.size();
-        for (int i =0;i<size;i++){
+
+//        宽度 和高度  size=1
+        int size = videoViews.size();
+        for (int i = 0; i < size; i++) {
             String peerId = persons.get(i);
-            SurfaceViewRenderer surfaceViewRenderer  =videoViews
-                    .get(peerId);
-            if (surfaceViewRenderer!=null){
+            SurfaceViewRenderer renderer1 = videoViews.get(peerId);
+
+            if (renderer1 != null) {
                 FrameLayout.LayoutParams layoutParams = new FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT);
-                layoutParams.height  = Utils.getWidth(this,size);
-                layoutParams.height = Utils.getWidth(this,size);
-                layoutParams.leftMargin = Utils.getX(this,size,i);
-                layoutParams.topMargin = Utils.getY(this,size,i);
-                surfaceViewRenderer.setLayoutParams(layoutParams);
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+                layoutParams.height = Utils.getWidth(this, size);
+                layoutParams.width = Utils.getWidth(this, size);
+                layoutParams.leftMargin = Utils.getX(this, size, i);
+                layoutParams.topMargin = Utils.getY(this, size, i);
+                renderer1.setLayoutParams(layoutParams);
             }
         }
     }
@@ -121,6 +139,8 @@ public class ChatRoomActivity extends AppCompatActivity {
      * @param mediaStream
      * @param socketId
      */
+
+    @Override
     public void onAddRemoteStream(MediaStream mediaStream, String socketId) {
         runOnUiThread(new Runnable() {
             @Override
@@ -128,5 +148,51 @@ public class ChatRoomActivity extends AppCompatActivity {
                 addView(socketId,mediaStream);
             }
         });
+    }
+
+    @Override
+    public void onCloseWithId(String socketId) {
+
+    }
+
+    public void toggleMic(boolean enableMic) {
+        webRTCManager.toggleMic(enableMic);
+    }
+
+    public void hangUp() {
+        exit();
+        this.finish();
+
+    }
+
+    private void exit() {
+        webRTCManager.exitRoom();
+        for (SurfaceViewRenderer renderer : videoViews.values()) {
+            renderer.release();
+        }
+        videoViews.clear();
+        persons.clear();
+
+    }
+
+    public void switchCamera() {
+        webRTCManager.switchCamera();
+
+    }
+
+    public void toggleLarge(boolean enableSpeaker) {
+        webRTCManager.toggleLarge(enableSpeaker);
+    }
+
+    public void toggleCamera(boolean enableCamera) {
+        if (localVideoTrack != null) {
+            localVideoTrack.setEnabled(enableCamera);
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        exit();
     }
 }

@@ -1,17 +1,19 @@
 package com.example.webrtcmeetingroom.connection;
 
 import android.content.Context;
+import android.media.AudioManager;
 import android.util.Log;
 
 import com.example.webrtcmeetingroom.ChatRoomActivity;
+import com.example.webrtcmeetingroom.interfaces.IViewCallback;
 import com.example.webrtcmeetingroom.socket.JavaWebSocket;
 
 import org.webrtc.AudioSource;
 import org.webrtc.AudioTrack;
-import org.webrtc.Camera1Capturer;
 import org.webrtc.Camera1Enumerator;
 import org.webrtc.Camera2Enumerator;
 import org.webrtc.CameraEnumerator;
+import org.webrtc.CameraVideoCapturer;
 import org.webrtc.DataChannel;
 import org.webrtc.DefaultVideoDecoderFactory;
 import org.webrtc.DefaultVideoEncoderFactory;
@@ -55,7 +57,7 @@ public class PeerConnectionManager {
     private AudioTrack localAudioTrack;
     // 获取摄像头设备
     private SurfaceTextureHelper surfaceTextureHelper;
-    private VideoCapturer capturerAndroid;
+    private VideoCapturer captureAndroid;
     // 视频源
     private VideoSource videoSource;
 
@@ -76,7 +78,12 @@ public class PeerConnectionManager {
     private ArrayList<String> connectionIdArray;
     // 会议室的每一个用户，会对本地实现一个p2p连接
     private Map<String,Peer> connectionPeerDic;
+    private AudioManager mAudioManager;
+    private IViewCallback viewCallback;
 
+    public void setViewCallback(IViewCallback viewCallback) {
+        this.viewCallback = viewCallback;
+    }
 
     /**
      * 当别人在会议室 我此时进去
@@ -112,6 +119,117 @@ public class PeerConnectionManager {
         });
     }
 
+    public void onRemoteJoinToRoom(String socketId) {
+        executor.execute(new Runnable() {
+            @Override
+            public void run() {
+                /*可能出现一进入房间， 就已经有其他人进入房间，并且给你发送一个_peer_new*/
+                if (localStream == null) {
+                    createLocalStream();
+                }
+                Peer peer = new Peer(socketId);
+                connectionIdArray.add(socketId);
+                connectionPeerDic.put(socketId, peer);
+            }
+        });
+    }
+
+    public void onReceiveOffer(String socketId, String description) {
+        //       角色发生变化     由主叫变成 被叫
+
+        executor.execute(new Runnable() {
+            @Override
+            public void run() {
+                role = Role.Receiver;
+                Peer mPeer = connectionPeerDic.get(socketId);
+                SessionDescription sdp = new SessionDescription(SessionDescription.Type.OFFER, description);
+                mPeer.peerConnection.setRemoteDescription(mPeer,sdp);
+            }
+        });
+    }
+
+    public void toggleSpeaker(boolean enableMic) {
+        if (localAudioTrack != null) {
+//            切换是否允许将本地的麦克风数据推送到远端
+            localAudioTrack.setEnabled(enableMic);
+        }
+    }
+
+    public void toggleLarge(boolean enableSpeaker) {
+        if (mAudioManager != null) {
+            mAudioManager.setSpeakerphoneOn(enableSpeaker);
+        }
+
+    }
+
+    public void switchCamera() {
+        if (captureAndroid == null) return;
+        if (captureAndroid instanceof CameraVideoCapturer) {
+            CameraVideoCapturer cameraVideoCapturer = (CameraVideoCapturer) captureAndroid;
+            cameraVideoCapturer.switchCamera(null);
+        }
+    }
+
+    public void exitRoom() {
+        ArrayList<String> myCopy;
+        myCopy = (ArrayList) connectionIdArray.clone();
+        for (String Id : myCopy) {
+            closePeerConnection( Id);
+        }
+//        释放ID集合
+        if (connectionIdArray != null) {
+            connectionIdArray.clear();
+        }
+//释放音频源
+        if (audioSource != null) {
+            audioSource.dispose();
+            audioSource = null;
+        }
+//        释放视频源
+        if (videoSource != null) {
+            videoSource.dispose();
+            videoSource = null;
+        }
+//停止预览摄像头
+        if (captureAndroid != null) {
+            try {
+                captureAndroid.stopCapture();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            captureAndroid.dispose();
+            captureAndroid = null;
+        }
+//        释放Surfacetext
+
+        if (surfaceTextureHelper != null) {
+            surfaceTextureHelper.dispose();
+            surfaceTextureHelper = null;
+        }
+        if (factory != null) {
+            factory.dispose();
+            factory = null;
+        }
+        if (webSocket != null) {
+            webSocket.close();
+        }
+
+    }
+
+    private void closePeerConnection(String connectionId) {
+        Peer mPeer = connectionPeerDic.get(connectionId);
+        if (mPeer != null) {
+            mPeer.peerConnection.close();
+        }
+        connectionPeerDic.remove(connectionId);
+        connectionIdArray.remove(connectionId);
+//        通知UI层更新
+        if (viewCallback != null) {
+            viewCallback.onCloseWithId(connectionId);
+        }
+    }
+
+
     // 角色 邀请者 被邀请者
     enum Role{Caller,Receiver}
     private Role role;
@@ -142,7 +260,7 @@ public class PeerConnectionManager {
 
         iceServers.add(iceServer);
         iceServers.add(iceServer1);
-
+        mAudioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
     }
 
     public void joinToRoom(JavaWebSocket javaWebSocket, boolean videoEnable, ArrayList<String> connections, String myId) {
@@ -171,6 +289,16 @@ public class PeerConnectionManager {
         });
     }
 
+    private void addStream() {
+
+        for (Map.Entry<String,Peer> entry:connectionPeerDic.entrySet()){
+            if (localStream==null){
+                createLocalStream();
+            }
+            entry.getValue().peerConnection.addStream(localStream);
+        }
+    }
+
     private void createOffers() {
         //邀请
         for (Map.Entry<String,Peer> entry:connectionPeerDic.entrySet()){
@@ -195,13 +323,13 @@ public class PeerConnectionManager {
         return mediaConstraints;
     }
 
-    private void addStream() {
-
-        for (Map.Entry<String,Peer> entry:connectionPeerDic.entrySet()){
-            if (localStream==null){
-                createLocalStream();
-            }
-            entry.getValue().peerConnection.addStream(localStream);
+    /**
+     * 对每一个会
+     */
+    private void createPeerConnections() {
+        for(String id:connectionIdArray){
+            Peer peer =new Peer(id);
+            connectionPeerDic.put(id,peer);
         }
     }
 
@@ -216,35 +344,23 @@ public class PeerConnectionManager {
         localAudioTrack = factory.createAudioTrack("ARDAMSa0",audioSource);
         localStream.addTrack(localAudioTrack);
         if (videoEnable){
-            capturerAndroid = createVideoCapture();
-            videoSource = factory.createVideoSource(capturerAndroid.isScreencast());
+            captureAndroid = createVideoCapture();
+            videoSource = factory.createVideoSource(captureAndroid.isScreencast());
             surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread",rootEglBase.getEglBaseContext());
-            capturerAndroid.initialize(surfaceTextureHelper,context,videoSource.getCapturerObserver());
-            capturerAndroid.startCapture(320,240,10);
+            captureAndroid.initialize(surfaceTextureHelper,context,videoSource.getCapturerObserver());
+            captureAndroid.startCapture(320,240,10);
 
             localVideoTrack = factory.createVideoTrack("ARDAMSv0",videoSource);
             localStream.addTrack(localVideoTrack);
 
-            if (context!=null){
-                context.onSetLocalStream(localStream,myId);
+            if (viewCallback!=null){
+                viewCallback.onSetLocalStream(localStream,myId);
             }
-
-
-
         }
 
     }
 
-    /**
-     * 对每一个会
-     */
-    private void createPeerConnections() {
-        for(String id:connectionIdArray){
-            Peer peer =new Peer(id);
-            connectionPeerDic.put(id,peer);
-        }
 
-    }
 
     private VideoCapturer createVideoCapture() {
         VideoCapturer videoCapturer = null;
@@ -283,6 +399,8 @@ public class PeerConnectionManager {
 
     private MediaConstraints createAudioConstraints() {
         MediaConstraints audioConstraints = new MediaConstraints();
+        audioConstraints.mandatory.add(new MediaConstraints.KeyValuePair(AUDIO_ECHO_CANCELLATION_CONSTRAINT
+                , "true"));
         audioConstraints.mandatory.add(new MediaConstraints.KeyValuePair(AUDIO_NOISE_SUPPRESSION_CONSTRAINT,"true"));
         audioConstraints.mandatory.add(new MediaConstraints.KeyValuePair(AUDIO_AUTO_GAIN_CONTROL_CONSTRAINT,"false"));
         audioConstraints.mandatory.add(new MediaConstraints.KeyValuePair(AUDIO_HIGH_PASS_FILTER_CONSTRAINT,"true"));
@@ -368,7 +486,9 @@ public class PeerConnectionManager {
         //p2p建立成功之后   mediaStream（视频流  音段流）  子线程
         @Override
         public void onAddStream(MediaStream mediaStream) {
-            context.onAddRemoteStream(mediaStream,socketId);
+            if (viewCallback != null) {
+                viewCallback.onAddRemoteStream(mediaStream,socketId);
+            }
         }
 
         @Override
@@ -405,10 +525,36 @@ public class PeerConnectionManager {
         public void onSetSuccess() {
             Log.i(TAG, "onSetSuccess: ");
             // 交换彼此的SDP iceCanndidate
-            if (peerConnection.signalingState()==PeerConnection.SignalingState.HAVE_LOCAL_OFFER){
+            if (peerConnection.signalingState() == PeerConnection.SignalingState.HAVE_REMOTE_OFFER) {
+//                把自己的sdp发送给对方    peerConnection.createAnswer   ----->  onSetSuccess
+                peerConnection.createAnswer(Peer.this, offerOrAnswerConstraint());
+            }else  if (peerConnection.signalingState() == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
+//                websocket
                 webSocket.sendOffer(socketId,peerConnection.getLocalDescription());
+//              由于设置了  peerConnection.createAnswer
+            } else if (peerConnection.signalingState() == PeerConnection.SignalingState.STABLE) {
+//                把自己的sdp  发送给对方
+                webSocket.sendAnswer(socketId, peerConnection.getLocalDescription().description);
             }
+        }
 
+        /**
+         * 设置传输音视频
+         * 音频()
+         * 视频(false)
+         * @return
+         */
+        private MediaConstraints offerOrAnswerConstraint() {
+//        媒体约束
+            MediaConstraints mediaConstraints = new MediaConstraints();
+            ArrayList<MediaConstraints.KeyValuePair> keyValuePairs = new ArrayList<>();
+//        音频  必须传输
+            keyValuePairs.add(new MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"));
+//        videoEnable
+            keyValuePairs.add(new MediaConstraints.KeyValuePair("OfferToReceiveVideo", String.valueOf(videoEnable)));
+
+            mediaConstraints.mandatory.addAll(keyValuePairs);
+            return mediaConstraints;
         }
 
         @Override

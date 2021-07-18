@@ -121,6 +121,35 @@ public class JavaWebSocket {
             handleAnswer(map);
         }
 
+        if (eventName.equals("_new_peer")) {
+            handleRemoteInRoom(map);
+        }
+        if (eventName.equals("_offer")) {
+            handleOffer(map);
+        }
+
+    }
+
+    private void handleOffer(Map map) {
+        Map data = (Map) map.get("data");
+        Map sdpDic;
+        if (data != null) {
+            sdpDic = (Map) data.get("sdp");
+            String socketId = (String) data.get("socketId");
+            String sdp = (String) sdpDic.get("sdp");
+            peerConnectionManager.onReceiveOffer(socketId, sdp);
+
+        }
+
+    }
+
+    private void handleRemoteInRoom(Map map) {
+        Map data = (Map) map.get("data");
+        String socketId;
+        if (data != null) {
+            socketId = (String) data.get("socketId");
+            peerConnectionManager.onRemoteJoinToRoom(socketId);
+        }
     }
 
     private void handleAnswer(Map map) {
@@ -223,6 +252,30 @@ public class JavaWebSocket {
         String jsonString = object.toString();
         Log.d(TAG, "send-->" + jsonString);
         mWebSocketClient.send(jsonString);
+    }
+
+    public void sendAnswer(String socketId, String description) {
+        HashMap<String, Object> childMap1 = new HashMap();
+        childMap1.put("type", "answer");
+        childMap1.put("sdp",description);
+
+        HashMap<String, Object> childMap2 = new HashMap();
+        childMap2.put("socketId", socketId);
+        childMap2.put("sdp", childMap1);
+        HashMap<String, Object> map = new HashMap();
+        map.put("eventName", "__answer");
+        map.put("data", childMap2);
+
+        com.alibaba.fastjson.JSONObject object = new com.alibaba.fastjson.JSONObject(map);
+        String jsonString  = object.toString();
+        Log.d(TAG, "send-->" + jsonString);
+        mWebSocketClient.send(jsonString);
+    }
+
+    public void close() {
+        if (mWebSocketClient != null) {
+            mWebSocketClient.close();
+        }
     }
 
 
